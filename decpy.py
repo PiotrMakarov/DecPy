@@ -1,13 +1,18 @@
 """
-Python Declarative Programming (DecPy) version 1.0.0
+Python Declarative Programming (DecPy) version 2.0.0
 
 The BSD 3-Clause Copyright (c) 2025 Paul Dobryak (Pavel Vadimovich Dobryak)
 
-A library for lazy evaluation and three types of declarative programming in Python:
+A library for lazy evaluation and 4 types of declarative programming in Python:
 1. An analogue of SQL (tuple calculus).
 2. An analogue of QBE (domain calculus).
-3. An analogue of Prolog (first-order predicate calculus, logic programming).
-Recursive queries.
+3. An analogue of Prolog (first-order predicate calculus, logic programming)
+with recursive queries.
+4. Declarative language for working with graphs.
+and instruments for functional programming:
+functors, applicative functors, monads and currying
+
+Verified on Python 3.13.0
 
 For the latest version and documentation, see
 https://github.com/pauldobriak/DecPy
@@ -20,6 +25,8 @@ tel, whatsapp: +79022726154
 
 from itertools import product
 from functools import reduce
+from inspect import signature
+from copy import deepcopy
 
 #Множественный конструктор
 def multiconstr(cls):
@@ -45,12 +52,15 @@ class expr:
             n=0
             buf=self.recparam[0].value
             self.recparam[0].value=lazyset()
+            #reclim=10
+            #while reclim>0:
             while True:
                 R=self.callmain(*args)
                 if len(R)==n:
                     break
                 n=len(R)
-                self.recparam[0].value=lazyset(R)
+                self.recparam[0].value=lazyset(R)    
+                #reclim=reclim-1
             self.recparam[0].value=buf
             return lazyset(R)
         else:
@@ -128,6 +138,8 @@ class expr:
                           
     def __str__(self):
         return str(self())
+    def __repr__(self):
+        return str(self)
     def __add__(self,other):
         return expr(self,"+",other)
     def __mul__(self,other):
@@ -154,7 +166,6 @@ class expr:
         return expr(self,"!=",other)
     def __and__(self,other):
         return expr(self,"&",other)
-
     def __truediv__(self,other):
         return expr(self,"/",other)
     def __floordiv__(self,other):
@@ -163,6 +174,22 @@ class expr:
         return expr(self,"neg",None)
     def __mod__(self,other):
         return expr(self,"%",other)
+
+    def __radd__(self,other):
+        return expr(other,"+",self)
+    def __rmul__(self,other):
+        return expr(other,"*",self)
+    def __rpow__(self,other):
+        return expr(other,"**",self)
+    def __rsub__(self, other):
+        return expr(other,"-",self)
+    def __rtruediv__(self, other):
+        return expr(other,"/",self)
+    def __rfloordiv__(self, other):
+        return expr(other,"//",self)
+    def __rmod__(self, other):
+        return expr(other,"%",self)
+
     # определение новых понятий в стиле пролога
     def __ior__(self,other):
         L=reccheck(self,other)
@@ -196,7 +223,14 @@ class expr:
             return lazyattr(self,attr)
     def __getitem__(self,ind):
         return lazyindex(self,ind)
-
+    def __deepcopy__(self,memo):
+        arg1 = deepcopy(self.arg1, memo)
+        op = deepcopy(self.op, memo)
+        arg2 = deepcopy(self.arg2, memo)
+        my_copy = type(self)(arg1,op,arg2)
+        my_copy.recstart = self.recstart
+        memo[id(self)] = my_copy
+        return my_copy
     
 #ленивая функция (в том числе - метод) для внутреннего использования    
 def lazyfunc(f):           
@@ -230,37 +264,226 @@ def lazyfun(f):
         return f(*[a() for a in args])
     return wrapper
 
+#универсальный способ добавления элемента в коллекцию
+def app(coll,el):
+    if type(coll)==tuple:
+        R=coll+(el,)
+        return R
+    elif hasattr(coll,"append"):
+        coll.append(el)
+        return coll
+    elif hasattr(coll,"add"):
+        coll.add(el)
+        return coll
+    
+#универсальный способ соединения коллекций:
+def merge(coll1,coll2):
+    if hasattr(coll1,"__add__") and hasattr(coll2,"__add__"):
+        #print("случай 1")
+        if type(coll1)==type(coll2):
+            return coll1+coll2
+        else:
+            return coll1+type(coll1)(coll2)
+    elif hasattr(coll1,"__or__") and hasattr(coll2,"__or__"):
+        #print("случай 2")
+        if type(coll1)==type(coll2):
+            return coll1 | coll2
+        else:
+            return coll1 | type(coll1)(coll2)
+    elif hasattr(coll1,"__add__") and hasattr(coll2,"__or__"):
+        #print("случай 3")
+        return coll1 + type(coll1)(coll2)
+    elif hasattr(coll1,"__or__") and hasattr(coll2,"__add__"):
+        #print("случай 4")
+        return coll1 | type(coll1)(coll2)
+    elif hasattr(coll1,"merge"):
+        #print("случай 5")
+        return coll1.merge(coll2)
+    
+
+#Линеаризация - превращение коллекции со множеством уровней вложенности в одномерную коллекцию
+#Или уменьшение количества уровней
+def flat(coll,n=0):
+    #функция обычной линеаризации:
+    def flat(coll):
+        if type(coll) in [list,set,tuple]:
+            L=type(coll)()
+        else:
+            L=()
+        for el in coll:
+            if type(el)==str or not(hasattr(el,"__iter__")):
+                L=app(L,el)
+            else:
+                L=merge(L,flat(el))
+        return L
+    def depth(coll,r=0):
+        D=[]
+        r=r+1
+        for el in coll:
+            if type(el)==str or not(hasattr(el,"__iter__")):
+                D.append(r)
+            else:
+                D.append(depth(el,r))
+        return max(D)
+    if n==0:
+        return flat(coll)
+    elif n>0:
+        if type(coll) in [list,set,tuple]:
+            L=type(coll)()
+        else:
+            L=()
+        for el in coll:
+            if type(el)==str or not(hasattr(el,"__iter__")):
+                L=app(L,el)
+            else:
+                L=merge(L,[var(el).flat(n-1)])
+        return L
+    else:
+        n=depth(coll)+n-1
+        return var(coll).flat(n)
+
+#Монадическое удаление дубликатов
+def monaddistinct(coll,D=None):
+    R=type(coll)()
+    if D==None:
+        D=[]
+    for el in coll:
+        if not(hasattr(el,"__iter__")):
+            if el not in D:
+                if hasattr(R,"append"):
+                    R.append(el)
+                else:
+                    R.add(el)
+                D.append(el)
+        else:
+            n=monaddistinct(el,D)
+            if len(n)==1:
+                if hasattr(R,"append"):
+                    R.append(*n)
+                else:
+                    R.add(*n)
+            elif len(n)>1:
+                if hasattr(R,"append"):
+                    R.append(n)
+                else:
+                    R.add(n)
+    return R
+
+#монадическое стягивание:
+def monadreduce(f,coll):
+    L=[]
+    for el in coll:
+        if not(hasattr(el,"__iter__")):
+            L.append(el)
+        else:
+            L.append(monadreduce(f,el))
+    return reduce(f,L)
+
+#Замена элементов коллекции на элементы из списка
+def monadreplace(coll,L,st=0):
+    j=st
+    for i in range(len(coll)):
+        if not(hasattr(coll[i],"__iter__")):
+            coll[i]=L[j]
+            j=j+1
+        else:
+            j=monadreplace(coll[i],L,j)
+    return j
+
 #абстрактный класс c ленивыми вычислительными методами
 class calculus:
     def __len__(self):
         return len(self())
     @lazyfunc
+    def flat(self,n=0):
+        return flat(self(),n)
+    @lazyfunc
     def len(self):
         return len(self())
+        #return len(flat(self()))
+    @lazyfunc
+    def monadlen(self):
+        #return len(self())
+        return len(flat(self()))
     @lazyfunc
     def sum(self):
         return sum(self())
+        #return sum(flat(self()))
+    @lazyfunc
+    def monadsum(self):
+        #sum(self())
+        return sum(flat(self()))
     @lazyfunc
     def min(self,arg=lambda x:x):
         return min(self(),key=arg)
+        #return min(flat(self()),key=arg)
+    @lazyfunc
+    def monadmin(self,arg=lambda x:x):
+        #return min(self(),key=arg)
+        return min(flat(self()),key=arg)
     @lazyfunc
     def max(self,arg=lambda x:x):
         return max(self(),key=arg)
+        #return max(flat(self()),key=arg)
+    @lazyfunc
+    def monadmax(self,arg=lambda x:x):
+        #return max(self(),key=arg)
+        return max(flat(self()),key=arg)
     @lazyfunc
     def avg(self):
         return sum(self())/len(self())
+        #return sum(flat(self()))/len(flat(self()))
+    @lazyfunc
+    def monadavg(self):
+        #return sum(self())/len(self())
+        return sum(flat(self()))/len(flat(self()))
     @lazyfunc
     def sorted(self,arg=lambda x:x):
         return sorted(self(),key=arg)
+        #return sorted(flat(self()),key=arg)
+    @lazyfunc
+    def monadsorted(self,arg=lambda x:x):
+        #return sorted(self(),key=arg)
+        #return sorted(flat(self()),key=arg)
+        L=sorted(flat(self()),key=arg)
+        R=deepcopy(self())
+        monadreplace(R,L)
+        return R
     @lazyfunc
     def group(self):
         return self()
     @lazyfunc
     def distinct(self):
-        return type(self())(set(self()))
+        S=self()
+        R=type(S)()
+        if hasattr(R,"append"):
+            for el in S:
+                if el not in R:
+                    R.append(el)
+            return R
+        elif hasattr(R,"add"):
+            for el in S:
+                if el not in R:
+                    R.add(el)
+            return R
+        elif type(R)==tuple:
+            for el in S:
+                if el not in R:
+                    R=R+(el,)
+            return R
+        else:
+            return type(self())(set(self()))
+    @lazyfunc
+    def monaddistinct(self):
+        return monaddistinct(self())
     @lazyfunc
     def reduce(self,arg):
         return reduce(arg,self())
+        #return sorted(flat(self()),key=arg)
+    @lazyfunc
+    def monadreduce(self,arg):
+        return monadreduce(arg,self())
+        #return sorted(flat(self()),key=arg)
     def All(self,arg):
         if type(arg) in [int,float,str]:
             a=var()
@@ -268,7 +491,8 @@ class calculus:
         @lazyfunc
         def f(self):
             return all(arg(el) for el in self)
-        return f
+            #return all(arg(el) for el in flat(self))
+        return f(self)
     def Any(self,arg):
         if type(arg) in [int,float,str]:
             a=var()
@@ -276,9 +500,27 @@ class calculus:
         @lazyfunc
         def f(self):
             return any(arg(el) for el in self)
-        return f
-
-calcfunclist=[calculus.len,calculus.max,calculus.min,calculus.sum]
+            #return any(arg(el) for el in flat(self))
+        return f(self)
+    def monadall(self,arg):
+        if type(arg) in [int,float,str]:
+            a=var()
+            arg = (a==arg)
+        @lazyfunc
+        def f(self):
+            return all(arg(el) for el in flat(self))
+        return f(self)
+    def monadany(self,arg):
+        if type(arg) in [int,float,str]:
+            a=var()
+            arg = (a==arg)
+        @lazyfunc
+        def f(self):
+            return any(arg(el) for el in flat(self))
+        return f(self)
+        
+#calcfunclist=[calculus.len,calculus.max,calculus.min,calculus.sum]
+calcfunclist=[calculus.len,calculus.max,calculus.min,calculus.sum,calculus.avg,calculus.monadlen,calculus.monadmax,calculus.monadmin,calculus.monadsum,calculus.monadavg]
 
 #абстрактный класс-предок для ленивого индекса и атрибута
 class lazyabc(expr,calculus):
@@ -297,8 +539,12 @@ class lazyabc(expr,calculus):
         return obj
     def createsign(self,L=None):
         return self.obj.createsign(L)
-    
-
+    def __deepcopy__(self,memo):
+        obj = deepcopy(self.obj, memo)
+        arg = deepcopy(self.arg, memo)
+        my_copy = type(self)(obj,arg)
+        memo[id(self)] = my_copy
+        return my_copy
     
 #Ленивый атрибут    
 class lazyattr(lazyabc):    
@@ -309,30 +555,287 @@ class lazyattr(lazyabc):
         #Потенциально опасно, но устраняет необходимость писать код типа F=flight.L
         elif self.arg == "L":
             return set(obj.__dict__.values())
-        
+
+#вспомогательная функция для заполнения пользовательской коллекции результатом - сохранения её типа и настроек. Несколько стратегий:
+def createcoll(obj,coll):
+    coll=list(coll)
+    #создается копия исходной коллекции и из нее удаляются элементы, не входящие в ответ
+    if type(obj)not in [multset, set, list] and hasattr(obj,"remove") and all(el in obj for el in coll):
+        R=deepcopy(obj)
+        for el in zip(obj,R):
+            if el[0] not in coll:
+                R.remove(el[1])
+        return R
+    #создание копии коллекции, её очистка и повторное заполнение отобранными значениями (попытка сохранить все настройки):
+    elif type(obj)not in [multset, set, list] and (hasattr(obj,"clear") or hasattr(obj,"remove")) and (hasattr(obj,"append") or hasattr(obj,"add")):
+        R=deepcopy(obj)
+        if hasattr(obj,"clear"):
+            R.clear()
+        else:
+            for el in R:
+                R.remove(el)
+        if hasattr(obj,"append"):
+            f=True
+        else:
+            f=False
+        for el in coll:
+            if f:
+                R.append(el)
+            else:
+                R.add(el)
+        return R
+    #создаем коллекцию с ключом, добавляем элементы
+    elif type(obj)not in [multset, set, list] and hasattr(obj,"key"):
+        return type(obj)([el for el in coll],obj.key)
+    #заполнение коллекции отобранными значениями - свойства-установки коллекции теряются.
+    else:
+        return type(obj)([el for el in coll])
+
+#вспомогательная функция - определяет, состоит ли коллекция только из истин и лжи
+def isbool(arg):
+    if not(hasattr(arg,"__iter__")):
+        if arg in [True,False]:
+            return True
+        else:
+            return False
+    else:
+        for a in arg:
+            if not(isbool(a)):
+                return False
+    return True
+
+#Формирование выборки на основе истин и лжи
+def selection(obj, arg):
+    R=[]
+    for el in zip(obj,arg):
+        if hasattr(el[1],"__iter__"):
+            r=selection(el[0],el[1])
+            if len(r)==1:
+                R.append(*r)
+            elif len(r)>0:
+                R.append(r)
+        elif el[1]:
+            R.append(el[0])
+    return type(obj)(R)
+    #return type(obj)(el[0] for el in zip(obj,arg) if el[1])
+
+
+#Запросы к графам
+def patternmatch(obj,arg):
+    if type(arg)!=tuple:
+        return False
+    if type(arg[0])!=tuple:
+        return False
+    f=True
+    for a in arg[0]:
+        if type(a)!=vartype and a!=Ellipsis:
+               f=False
+               break
+    if f:
+        #Шаблон (A,A,...) Пути в дереве
+        if len(arg[0])==3 and type(arg[0][0])==vartype and type(arg[0][1])==vartype and arg[0][2]==Ellipsis:
+            #print("(A,A,...)")
+            R=packelements(var(obj))
+            M=var(obj)
+            n=len(obj)
+            while True:
+                P=lazyset()
+                for m in M*R:
+                    S=lazyset({(m[0],m[1])})[arg[0][:-1]+arg[1:]]()
+                    if len(S)>0:
+                        P.append(m)
+                R = R | P
+                k=len(R())
+                if k==n:
+                    break
+                else:
+                    n=k
+            return R()
+        #Шаблон (A,A,...,A) Пути в графе без циклов
+        elif len(arg[0])==4 and type(arg[0][0])==vartype and type(arg[0][1])==vartype and arg[0][2]==Ellipsis and type(arg[0][3])==vartype:
+            R=packelements(var(obj))
+            M=var(obj)
+            n=len(obj)
+            #print("(A,A,...,A)")
+            while True:
+                P=lazyset()
+                for m in M*R:
+                    S=lazyset({(m[0],m[1],m[-1])})[arg[0][:2]+(arg[0][3],)+arg[1:]]()
+                    if len(S)>0:
+                        P.append(m)
+                R = R | P
+                k=len(R())
+                if k==n:
+                    break
+                else:
+                    n=k
+            return R()
+        #Шаблон (A,A,...,A,...) Пути в  графе
+        elif len(arg[0])==5 and type(arg[0][0])==vartype and type(arg[0][1])==vartype and arg[0][2] is Ellipsis and type(arg[0][3])==vartype and arg[0][4] is Ellipsis:
+            R=packelements(var(obj))
+            M=var(obj)
+            n=len(obj)
+            #print("(A,A,...,A,...)")
+            while True:
+                P=lazyset()
+                for m in M*R:
+                    fl=True
+                    for i in range(1,len(m)):
+                        S=lazyset({(m[0],m[1],m[i])})[arg[0][:2]+(arg[0][3],)+arg[1:]]()
+                        if len(S)==0:
+                            fl=False
+                            break
+                    if fl:
+                        P.append(m)
+                R = R | P
+                k=len(R())
+                if k==n:
+                    break
+                else:
+                    n=k
+            return R()
+        #Шаблон (A,...,A,...,A) циклы, воcьмерки тоже выводятся
+        elif len(arg[0])==5 and type(arg[0][0])==vartype and arg[0][1] is Ellipsis and type(arg[0][2])==vartype and arg[0][3] is Ellipsis and type(arg[0][4])==vartype:
+            M=var(obj)
+            C=set()
+            P=var(obj)
+            #print("(A,...,A,...,A)")
+            while True:
+                newP=lazyset()
+                for m in M*P:
+                    S=lazyset({(m[0],m[1])})[(arg[0][0],arg[0][2])+arg[1:]]()
+                    if len(S)>0:
+                        if m[0]==m[-1]:
+                            C.add(m[:-1])
+                        elif m[0] not in m[1:]:
+                            newP.append(m)
+                if len(newP())==0:
+                    break
+                else:
+                    P=newP
+            #Убираем одинаковые циклы
+            D=set()
+            for c in C:
+                f=True
+                d=c
+                for i in range(len(c)):
+                    d=d[1:]+(d[0],)
+                    if d in D:
+                        f=False
+                        break
+                if f:
+                    D.add(d)
+            return D
+        #Шаблон (A,...,A) циклы, удаление восьмерок
+        elif len(arg[0])==3 and type(arg[0][0])==vartype and arg[0][1] is Ellipsis and type(arg[0][2])==vartype:
+            M=var(obj)
+            C=set()
+            P=var(obj)
+            #print("(A,...,A)")
+            while True:
+                newP=lazyset()
+                for m in M*P:
+                    S=lazyset({(m[0],m[1])})[(arg[0][0],arg[0][2])+arg[1:]]()
+                    if len(S)>0:
+                        if m[0]==m[-1]:
+                            C.add(m[:-1])
+                        elif m[0] not in m[1:]:
+                            newP.append(m)
+                if len(newP())==0:
+                    break
+                else:
+                    P=newP
+            #Убираем одинаковые циклы
+            D=set()
+            for c in C:
+                f=True
+                d=c
+                for i in range(len(c)):
+                    d=d[1:]+(d[0],)
+                    if d in D:
+                        f=False
+                        break
+                if f:
+                    D.add(d)
+            #Убираем "восьмерки" - рекурсивно ищем циклы в уже найденном цикле
+            E=set()
+            for d in D:
+                dc=lazyset(d)[(arg[0][0],...,arg[0][2],...,arg[0][2]),*arg[1:]]()
+                if len(dc)==1:
+                   E.add(d) 
+            return E
+        #декартово произведение множества само на себя несколько раз
+        #Шаблон (A,B,C,D,E)
+        else:
+            M=lazyset(obj)
+            for i in range(len(arg[0])-1):
+                M=M*lazyset(obj)
+            if len(arg)>1:
+                R=M[arg[0]+arg[1:]]
+            else:
+                R=M()
+            return R
+    return f
 
 #Ленивый индекс
 class lazyindex(lazyabc):
+
+    # проверка и расчет декларативных цепочек
+    def chainmatch(self,*args):
+        # шаблон A*A*...*A*...
+        if type(self.obj)==expr and hasattr(self.obj,"op") and self.obj.arg2 is Ellipsis and type(self.obj.arg1.arg1)==expr and hasattr(self.obj.arg1.arg1,"op") and self.obj.arg1.arg1.arg2 is Ellipsis:
+            return var(self.obj.arg1.arg2())[((self.arg[0],self.arg[1],...,self.arg[2],...),)+self.arg[3:]](*args)
+        # шаблон A*A*...
+        elif type(self.obj)==expr and hasattr(self.obj,"op") and self.obj.arg2 is Ellipsis:
+            return var(self.obj.arg1.arg2())[((self.arg[0],self.arg[1],...),)+self.arg[2:]](*args)
+        # шаблон A*...*A*...*A - цикл с сохранением восьмерок
+        elif type(self.obj)==expr and hasattr(self.obj,"op") and type(self.obj.arg1)==expr and hasattr(self.obj.arg1,"op") and self.obj.arg1.arg2 is Ellipsis and type(self.obj.arg1.arg1)==expr and hasattr(self.obj.arg1.arg1,"op") and type(self.obj.arg1.arg1.arg1)==expr and hasattr(self.obj.arg1.arg1.arg1,"op") and self.obj.arg1.arg1.arg1.arg2 is Ellipsis:
+            return var(self.obj.arg2())[((self.arg[0],...,self.arg[1],...,self.arg[1]),self.arg[1])+self.arg[2:]](*args)
+        # шаблон A*A*...*A
+        elif type(self.obj)==expr and hasattr(self.obj,"op") and type(self.obj.arg1)==expr and hasattr(self.obj.arg1,"op") and self.obj.arg1.arg2 is Ellipsis and type(self.obj.arg1.arg1)==expr and hasattr(self.obj.arg1.arg1,"op"):
+            return var(self.obj.arg2())[((self.arg[0],self.arg[1],...,self.arg[2]),)+self.arg[3:]](*args)    
+        # шаблон A*...*A - цикл c удалением восьмерок
+        elif type(self.obj)==expr and hasattr(self.obj,"op") and type(self.obj.arg1)==expr and hasattr(self.obj.arg1,"op") and self.obj.arg1.arg2 is Ellipsis:
+            return var(self.obj.arg2())[((self.arg[0],...,self.arg[1]),)+self.arg[2:]](*args)
+        return False
+    
     def __call__(self,*args):
+        #проверка декларативной цепочки, возвращение результата поиска
+        P=self.chainmatch(*args)
+        if P:
+            return P
         obj = super().__call__(*args)
-        #while callable(obj):
-        #    obj=obj()
         while callable(obj):
             if hasattr(obj,"__dict__") and ("qrcls" in obj.__dict__) and (obj.__dict__["qrcls"]==True):
                 break
             obj=obj()
+        #проверка соответствия шаблону, возвращение результата поиска
+        P = patternmatch(obj,self.arg)
+        if P:
+            return P
+        #монадическая выборка
+        if type(self.arg)==monad:
+            R=self.arg(obj)()()
+            if isbool(R):
+                return var(obj)[R]()
+            else:
+                return R
+            #return var(obj)[self.arg(obj)()()]()
         # Одно условие - исчисление на кортежах
         if callable(self.arg):
-            #return type(obj)(el for el in obj if self.arg(el))
-            #return type(obj)(self.arg(el) for el in obj if self.arg(el))
-            if type(self.arg) is expr and self.arg.op not in ["<","<=","==",">=",">","!=","&","|","^"]:
-                return type(obj)(self.arg(el) for el in obj)
+            if type(self.arg) is expr and self.arg.op not in ["<","<=","==",">=",">","!=","&","|","^"]:                
+                return createcoll(obj,(self.arg(el) for el in obj))
+                #return type(obj)(self.arg(el) for el in obj)
+                #return type(obj)(*(self.arg(el) for el in obj))
             elif type(self.arg)in [expr,var]:#вероятно, ошибка - вместо var - vartype
-                return type(obj)(el for el in obj if self.arg(el))
+                return createcoll(obj,(el for el in obj if self.arg(el)))
+                #return type(obj)(el for el in obj if self.arg(el))
             else:
                 if type(self.arg) is expr and self.arg.op in ["<","<=","==",">=",">","!=","&","|","^"]:
-                    return type(obj)(self.arg(el) for el in obj if self.arg(el))
+                    return createcoll(obj,(self.arg(el) for el in obj if self.arg(el)))
+                    #return type(obj)(self.arg(el) for el in obj if self.arg(el))
                 else:
+                    return createcoll(obj,(self.arg(el) for el in obj))
                     return type(obj)(self.arg(el) for el in obj)
         
         # Несколько условий - исчисление на доменах или проекция
@@ -511,11 +1014,38 @@ class lazyindex(lazyabc):
                         if len(ex)==1:
                             ex=ex[0]
                         B.add(ex)
-                    
+                
+                #пробуем преобразовать результат в тип исходной коллекции:
+                f=False
+                if len(B)>0 and not(g):    
+                    for b in B:
+                        exampleres=b
+                        break
+                    if exampleres in obj:
+                        f=True
+                    elif hasattr(exampleres,"__iter__") and hasattr(example,"__iter__") and hasattr(exampleres,"__len__") and hasattr(example,"__len__") and len(exampleres)==len(example) and not(hasattr(example,"qrcls")):
+                        f=all(type(el[0])==type(el[1]) for el in zip(exampleres,example))
+                        if type(example)(exampleres) in obj:
+                            f=True
+                            B=(type(example)(b) for b in B)
+                if f and not(g):
+                    return createcoll(obj,B)
+                else:
+                    return multset(B)
+                
                 return multset(B)
         # Числовой индекс или срез
         else:
-            return obj.__getitem__(self.arg)
+            # индекс из истин и лжи
+            if type(self.arg)!=int and isbool(self.arg):
+                return selection(obj,self.arg)
+            # Числовой индекс или срез
+            else:
+                if hasattr(obj,"__getitem__"):
+                    return obj.__getitem__(self.arg)
+                elif hasattr(obj,"__dict__"):
+                    return list(obj.__dict__.values())[self.arg]
+                return obj.__getitem__(self.arg)
     
     #общий индекс из индексов аргументов при декартовом произведении
     def __pow__(self,other):
@@ -594,18 +1124,30 @@ def indpropagation(self,other):
             return other[self.arg]
         else:
             return other[self.arg]  
+
+
+
         
 #Ленивая переменная    
 @multiconstr
 class var(expr,calculus):
     def __init__(self,value=None):
         self.value=value
+        #self.addgetitem()
     def __call__(self,*args):
         if len(args)==0:
             return self.value
         else:
             self.value=args[0]
+            #self.addgetitem()
             return self.value
+    # Функция - попытка добавить итератор к обычной коллекции - перебор её атрибутов.
+    def addgetitem(self):
+        if not(hasattr(self.value,"__iter__")) and not(hasattr(self.value,"__getitem__")) and hasattr(self.value,"__dict__"):
+            K=list(self.value.__dict__.keys())
+            setattr(type(self.value),"__iter__", lambda self : iter(list(self.__dict__[k] for k in K)))
+            setattr(type(self.value),"__next__", lambda self : next(list(self.__dict__[k] for k in K)))
+            
     #добавление переменной в сигнатуру функции из ленивого выражения
     def createsign(self,L=None):
         if L==None:
@@ -618,12 +1160,28 @@ class var(expr,calculus):
             L.append(self)
         return L
     def add(self,value):
-        self.value.add(value)
+        if hasattr(self.value,"add"):
+            self.value.add(value)
+        else:
+            self.value.append(value)
     def append(self,value):
-        self.value.append(value)    
+        if hasattr(self.value,"append"):
+            self.value.append(value)
+        else:
+            self.value.add(value)
     def __setitem__(self,ind,value):
         self(value)
-
+    def __deepcopy__(self,memo):
+        my_copy = type(self)()
+        memo[id(self)] = my_copy
+        my_copy.value = deepcopy(self.value, memo)
+        return my_copy
+    def __iter__(self):
+        if hasattr(self.value,"__iter__"):
+            return iter(self.value)
+        elif hasattr(self.value,"__dict__"):
+            return iter(list(self.value.__dict__[k] for k in self.value.__dict__))
+    
 
 #используемые для сравнения типы данных  
 funcanytype = type(calculus.Any(var(),var()==5))
@@ -631,7 +1189,8 @@ funcalltype = type(calculus.All(var(),var()==5))
 vartype = type(var())
 vargrouptype = type(var().group())
 simpletypes = [int,float,str]
-agrfunctypes = [type(var().sum()),type(var().len()),type(var().min()),type(var().max())]
+#agrfunctypes = [type(var().sum()),type(var().len()),type(var().min()),type(var().max())]
+agrfunctypes = [type(var().sum()),type(var().len()),type(var().min()),type(var().max()),type(var().avg()),type(var().monadsum()),type(var().monadlen()),type(var().monadmin()),type(var().monadmax()),type(var().monadavg())]
 
 #множество с операциями декартова произведения      
 class multset(set):
@@ -719,7 +1278,8 @@ def lazyset(L=None):
     v(M)
     return v
 
-#декоратор, добавляющий к классу экстент (экземпляры автоматически помещаются в ленивое множество)
+#декоратор, добавляющий к классу экстент - ленивое множество
+#(экземпляры автоматически помещаются в ленивое множество)
 def queryclass(cls):
     class metaset(type):
         def __init__(self,*args):
@@ -771,6 +1331,64 @@ def queryclass(cls):
             return len(list(self.__dict__.values()))
     return newclass
 
+#декоратор, добавляющий к классу экстент - любую коллекцию
+def querycoll(coll=None,key=None):
+    def queryclass(cls):
+        class metaset(type):
+            def __init__(self,*args):
+                if coll==None:
+                    self.L=lazyset()
+                elif key==None:
+                    self.L=var(coll())
+                else:
+                    self.L=var(coll([],key))
+                self.qrcls=True
+            def __repr__(self):
+                return self.L.__repr__
+            def __getitem__(self,i):
+                return self.L[i]
+            def __str__(self):
+                return self.L.__str__()
+            def __or__(self,other):
+                if type(other)==vartype:
+                    return self.L | other()
+                else:
+                    return self.L | other.L
+            def __and__(self,other):
+                return self.L & other.L
+            def __mul__(self,other):
+                return self.L * other.L
+            def __sub__(self,other):
+                return self.L - other.L
+            def __xor__(self,other):
+                return self.L ^ other.L
+            def __pow__(self,other):
+                if type(other)==expr:
+                    return self.L ** other
+                else:
+                    return self.L ** other.L
+            def __iter__(self):
+                return self.L().__iter__()
+            def __next__(self):
+                return self.L().__next__()
+        class newclass(cls,metaclass=metaset):
+            def __init__(self,*args):
+                super().__init__(*args)
+                self.__class__.L.add(self)
+                self.__class__.L.L.name=cls.__name__
+
+            def __getattr__(self,attr):
+                if attr in self.__dict__:
+                    return self.__dict__[attr]
+                elif attr=="L":
+                    return tuple(self.__dict__.values())
+            def __getitem__(self,ind):
+                return list(self.__dict__.values())[ind]
+            def __len__(self):
+                return len(list(self.__dict__.values()))
+        return newclass
+    return queryclass
+
 
 #превращение функции в предикат
 class queryfun:
@@ -802,9 +1420,9 @@ class queryfun:
             self(*arg)
 
 # строка таблицы - предиката
-def tablerow(header,lst):
+def tablerow(header):
     class newclass:
-        def __init__(self,header,lst):
+        def __init__(self,lst):
             self.header=header
             self.L=lst
             self.qrcls=True
@@ -825,8 +1443,8 @@ def tablerow(header,lst):
             return str(self.L)
         def __len__(self):
             return len(list(self.L))
-    res = newclass(header,lst)
-    return res
+    return newclass
+
 
 # таблица - предикат
 @multiconstr
@@ -834,21 +1452,28 @@ class table:
     def __init__(self,*args):
         self.L=lazyset()
         self.header = (args)
+        self.rowclass =tablerow(self.header)
         self.allowfact = True
         self.terms=[]
         self.recstart=False
     def __call__(self,*args):
         if self.allowfact:
             if len(self.header)==0:
+                if len(args)==0:
+                    return self.L
                 if len(args)==1:
                     self.L.add(args[0])
                 else:
                     self.L.add(args)
                 return args
             else:
-                el = tablerow(self.header,args)
-                self.L.add(el)
-                return el
+                if len(args)!=0:
+                    #el = tablerow(self.header,args)
+                    el = self.rowclass(args)
+                    self.L.add(el)
+                    return el
+                else:
+                    return self.L
         else:
             n=len(self.L)
             while True:
@@ -876,11 +1501,20 @@ class table:
     def __getitem__(self,ind):
         return self.realobj()[ind]
     def __mul__(self,other):
-        return self.realobj() * other.L
+        #if type(other)!=table:
+        if type(other)!=type(table()):
+            return self.realobj() * other
+        else:
+            return self.realobj() * other.realobj()
     def __pow__(self,other):
-        return self.realobj() ** other.L
+        #if type(other)!=table:
+        if type(other)!=type(table()):
+            return self.realobj() ** other
+        else:
+            return self.realobj() ** other.realobj()
     def __or__(self,other):
-        if type(other)!=table:
+        #if type(other)!=table:
+        if type(other)!=type(table()):
             return self.realobj() | other
         else:
             return self.realobj() | other.realobj()
@@ -964,3 +1598,80 @@ def lazyrange(*args):
         n=func(n)
     return L
 
+#ИНСТРУМЕНТЫ ФУНКЦИОНАЛЬНОГО ПРОГРАММИРОВАНИЯ
+
+# Карринг
+def curry(f):
+    def curry(f):
+        return lambda *y: functor(lambda x: f(*y,x))
+    if type(f)==expr:
+        length=len(f.createsign())
+    else:
+        length = len(signature(f).parameters)
+    for i in range(length-1):
+        f=curry(f)
+    return f
+
+# Аппликативный функтор
+class applicative:
+    def __init__(self,coll):
+        self.coll=coll
+    def __call__(self,arg):
+        #R=type(self.coll)(f(arg) for f in self.coll)
+        if type(self.coll)!=set:
+            R=type(self.coll)(f(arg) for f in self.coll)
+        else:
+            R=tuple(f(arg) for f in self.coll)
+        app=False
+        for el in R:
+            if callable(el):
+                app=True
+                break
+        if app:
+            return applicative(R)
+        else:
+            return R
+        #return type(self.coll)(f(arg) for f in self.coll)
+    def __iter__(self):
+        return iter(self.coll)
+
+
+# Функтор, также работает как монада
+class functor:
+    def __init__(self,f):
+        self.f=curry(f)
+    def __call__(self,arg):
+        while callable(arg):
+            arg=arg()
+        if not(hasattr(arg,"__iter__")):
+            return self.f(arg)
+        else:
+            #R=(type(arg)(self(el) for el in arg))
+            if type(arg)!=set:
+                R=(type(arg)(self(el) for el in arg))
+            else:
+                R=(tuple(self(el) for el in arg))
+            app=False
+            for el in R:
+                if callable(el):
+                    app=True
+                    break
+            if app:
+                return applicative(R)
+            else:
+                return R
+    def __matmul__(self,other):
+        return functor(lambda *args: self(other(*args)))
+
+# Монада. Работает как f(x,y) -> f([...],[...])                
+class monad:
+    def __init__(self,f):
+        self.f=functor(f)
+    @lazyfunc
+    def __call__(self,*args):
+        R=self.f(args[0])
+        for i in range(1,len(args)):
+            R=R(args[i])
+        res=var()
+        res(R)
+        return res
