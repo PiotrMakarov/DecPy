@@ -3,6 +3,7 @@
 .docx
 .pdf
 .cuda-session
+.local
 
 .idea/
 .vscode/
@@ -48,6 +49,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 cover/
 
 # Translations
