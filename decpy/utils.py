@@ -3,7 +3,10 @@ from functools import reduce
 
 # универсальный способ добавления элемента в коллекцию
 def app(coll, el):
-    if type(coll) == tuple:
+    if isinstance(coll, dict):
+        coll[el[0]] = el[1]
+        return coll
+    elif type(coll) == tuple:
         R = coll + (el,)
         return R
     elif hasattr(coll, "append"):
@@ -39,6 +42,17 @@ def merge(coll1, coll2):
 def flat(coll, n=0):
     # функция обычной линеаризации:
     def flat(coll):
+        if isinstance(coll, dict):
+            L = {}
+            for k, v in coll.items():
+                if isinstance(v, dict):
+                    sub = flat(v)
+                    for sk, sv in sub.items():
+                        nk = (k,) + sk if isinstance(sk, tuple) else (k, sk)
+                        L[nk] = sv
+                else:
+                    L[k] = v
+            return L
         if type(coll) in [list, set, tuple]:
             L = type(coll)()
         else:

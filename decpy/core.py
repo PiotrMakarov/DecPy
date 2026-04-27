@@ -95,13 +95,20 @@ class expr:
         if self.op == "+":
             return arg1 + arg2
         elif self.op == "*":
+            if isinstance(arg1, dict):
+                arg1 = multset(arg1.items())
+            if isinstance(arg2, dict):
+                arg2 = multset(arg2.items())
             if manymult and type(arg1) is multset and type(arg2) is multset:
                 return arg1.specialmult(arg2)
             if type(arg1) == set or type(arg2) == set:
                 return multset(arg1) * multset(arg2)
             return arg1 * arg2
         elif self.op == "**":
-            # заплатка - дополнительные проверки
+            if isinstance(arg1, dict):
+                arg1 = multset(arg1.items())
+            if isinstance(arg2, dict):
+                arg2 = multset(arg2.items())
             if type(arg1) == set or type(arg2) == set:
                 return multset(arg1) ** multset(arg2)
             return arg1**arg2

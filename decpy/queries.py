@@ -52,6 +52,8 @@ class lazyabc(expr, calculus):
 class lazyattr(lazyabc):
     def __call__(self, *args):
         obj = super().__call__(*args)
+        if isinstance(obj, dict) and self.arg in ("keys", "values", "items"):
+            return lazyset(getattr(obj, self.arg)())
         if self.arg in obj.__dict__:
             return obj.__dict__[self.arg]
         # Потенциально опасно, но устраняет необходимость писать код типа F=flight.L
@@ -105,7 +107,7 @@ def createcoll(obj, coll):
 
 # вспомогательная функция - определяет, состоит ли коллекция только из истин и лжи
 def isbool(arg):
-    if not (hasattr(arg, "__iter__")):
+    if isinstance(arg, str) or not (hasattr(arg, "__iter__")):
         if arg in [True, False]:
             return True
         else:
@@ -325,6 +327,235 @@ def patternmatch(obj, arg):
     return f
 
 
+def _tuple_query(obj, arg):
+    """Domain calculus / projection для кортежа-индекса.
+
+    Вынесено из `lazyindex.__call__`, чтобы можно было переиспользовать
+    при обработке `dict[tuple]` через `multset(obj.items())`.
+    """
+    sign = []
+    func = []
+    example = None
+    for el in obj:
+        example = el
+        break
+    if example == None:
+        return multset()
+    if type(example) in simpletypes:
+        lenexample = 1
+    else:
+        lenexample = len(example)
+    if lenexample > len(arg):
+        A = set()
+        for el in obj:
+            f = True
+            for i in range(len(arg)):
+                if type(arg[i]) is expr:
+                    if not (arg[i](el)):
+                        f = False
+                        break
+            if f:
+                a = []
+                for i in range(len(arg)):
+                    if type(arg[i]) in [lazyindex, lazyattr, expr]:
+                        xx = arg[i](el)
+                        if type(xx) != bool:
+                            a.append(xx)
+                        else:
+                            a.append(el)
+                if len(a) == 1:
+                    A.add(a[0])
+                else:
+                    A.add(tuple(a))
+        return multset(A)
+    else:
+        g = False
+        lg = 0
+        arggroup = [None] * min(len(arg), lenexample)
+        for i in range(min(len(arg), lenexample)):
+            if type(arg[i]) == vargrouptype:
+                g = True
+                lg = lg + 1
+                arggroup[i] = var()
+        if g:
+            grp = lazyset(obj)[*arggroup]
+            res = lazyset()
+            for el in grp:
+                k = 0
+                arggroup1 = [var() for a in range(len(arggroup))]
+                for i in range(len(arggroup)):
+                    if type(arggroup[i]) == vartype:
+                        if lg > 1:
+                            arggroup1[i] = el[k]
+                        else:
+                            arggroup1[i] = el
+                        k = k + 1
+                grp1 = lazyset(obj)[*arggroup1]
+                b = []
+                for i in range(len(arggroup1)):
+                    if type(arggroup1[i]) == vartype:
+                        b.append([])
+                    else:
+                        b.append(arggroup1[i])
+                for a in grp1:
+                    for i in range(len(a)):
+                        if type(arggroup[i]) != vartype:
+                            b[i].append(a[i])
+                for i in range(len(b)):
+                    if type(b[i]) == list:
+                        b[i] = tuple(b[i])
+                b = tuple(b)
+                res.add(b)
+            obj = res
+        for i in range(min(len(arg), lenexample)):
+            if arg[i] != None:
+                sign.append(i)
+        for i in range(len(arg)):
+            if arg[i] != None:
+                if callable(arg[i]):
+                    func.append(arg[i])
+                else:
+                    if i < lenexample:
+                        v = var()
+                        func.append(v == arg[i])
+        if lenexample == 1:
+            A = {(el,) for el in obj}
+        else:
+            A = {tuple(el[i] for i in sign) for el in obj}
+        B = multset()
+        for el in A:
+            f = True
+            for i in range(min(len(func), len(sign))):
+                if type(func[i]) == funcanytype or type(func[i]) == funcalltype:
+                    if not (func[i](el[i])()):
+                        f = False
+                        break
+                elif (
+                    type(func[i]) not in [vartype, lazyindex, lazyattr]
+                    and type(func[i]) not in agrfunctypes
+                    and not (func[i](el[i]))
+                ):
+                    f = False
+                    break
+            if f:
+                argname = []
+                for i in range(lenexample):
+                    if arg[i] != None:
+                        argname.append(arg[i])
+                mask = [True] * len(argname)
+                for i in range(len(argname)):
+                    for j in range(i + 1, len(argname)):
+                        if argname[i] is argname[j]:
+                            mask[j] = False
+                            if el[i] != el[j]:
+                                f = False
+                                break
+                    if not (f):
+                        break
+            if f:
+                for i in range(len(sign), len(func)):
+                    S = func[i].createsign()
+                    for j in range(len(S)):
+                        for k in range(len(sign)):
+                            if S[j] is arg[sign[k]]:
+                                S[j](el[k])
+                    if not (func[i]()):
+                        f = False
+                        break
+            if f:
+                el = list(el)
+                for i in range(len(sign)):
+                    if (
+                        type(arg[sign[i]]) in [lazyindex, lazyattr]
+                        or arg[sign[i]] in calcfunclist
+                    ):
+                        xx = arg[sign[i]](el[i])
+                        if type(xx) != bool:
+                            el[i] = xx
+                el = tuple(el)
+            if f:
+                ex = tuple(el[i] for i in range(len(el)) if mask[i])
+            if f:
+                ex = list(ex)
+                for i in range(lenexample, len(arg)):
+                    if (
+                        type(arg[i])
+                        not in [expr, lazyindex, lazyattr, vartype]
+                        and arg[i] not in calcfunclist
+                    ):
+                        ex.append(arg[i])
+                    elif type(arg[i]) == vartype:
+                        for j in range(len(sign)):
+                            if arg[i] is arg[sign[j]]:
+                                ex.append(el[j])
+                    elif (
+                        type(arg[i]) == expr
+                        and arg[i].op
+                        not in ["<", "<=", "==", ">=", ">", "!="]
+                        or type(arg[i]) in [lazyindex, lazyattr]
+                        or arg[i] in calcfunclist
+                    ):
+                        S = arg[i].createsign()
+                        for j in range(len(S)):
+                            for k in range(len(sign)):
+                                if S[j] is arg[sign[k]]:
+                                    S[j](el[k])
+                        aa = arg[i]()
+                        if type(aa) is not bool:
+                            ex.append(aa)
+                ex = tuple(ex)
+            if f:
+                if len(ex) == 1:
+                    ex = ex[0]
+                B.add(ex)
+
+        f = False
+        if len(B) > 0 and not (g):
+            for b in B:
+                exampleres = b
+                break
+            if exampleres in obj:
+                f = True
+            elif (
+                hasattr(exampleres, "__iter__")
+                and hasattr(example, "__iter__")
+                and hasattr(exampleres, "__len__")
+                and hasattr(example, "__len__")
+                and len(exampleres) == len(example)
+                and not (hasattr(example, "qrcls"))
+            ):
+                f = all(
+                    type(el[0]) == type(el[1])
+                    for el in zip(exampleres, example)
+                )
+                if type(example)(exampleres) in obj:
+                    f = True
+                    B = (type(example)(b) for b in B)
+        if f and not (g):
+            return createcoll(obj, B)
+        else:
+            return multset(B)
+
+
+def _handle_dict_query(obj, arg):
+    """Обработка запросов к dict: фильтрация/преобразование значений
+    и domain calculus через пары (ключ, значение)."""
+    if type(arg) is tuple:
+        result = _tuple_query(multset(obj.items()), arg)
+        if (
+            isinstance(result, multset)
+            and len(result) > 0
+            and all(type(el) is tuple and len(el) == 2 for el in result)
+        ):
+            return dict(result)
+        return result
+    if type(arg) is expr:
+        if arg.op in ("<", "<=", "==", ">=", ">", "!=", "&", "|", "^"):
+            return {k: v for k, v in obj.items() if arg(v)}
+        return {k: arg(v) for k, v in obj.items()}
+    return obj
+
+
 # Ленивый индекс
 class lazyindex(lazyabc):
     # проверка и расчет декларативных цепочек
@@ -421,6 +652,13 @@ class lazyindex(lazyabc):
             else:
                 return R
             # return var(obj)[self.arg(obj)()()]()
+        # Декларативные запросы к dict: фильтрация/преобразование значений
+        # и domain calculus через пары (key, value)
+        if isinstance(obj, dict) and (
+            (callable(self.arg) and type(self.arg) is expr)
+            or type(self.arg) is tuple
+        ):
+            return _handle_dict_query(obj, self.arg)
         # Одно условие - исчисление на кортежах
         if callable(self.arg):
             if type(self.arg) is expr and self.arg.op not in [
@@ -463,228 +701,7 @@ class lazyindex(lazyabc):
 
         # Несколько условий - исчисление на доменах или проекция
         elif type(self.arg) == tuple:
-            sign = []
-            func = []
-            example = None
-            for el in obj:
-                example = el
-                break  # для множеств с переменной длинной кортежей может понадобиться перебор всего множества
-            if example == None:
-                return multset()
-            if type(example) in simpletypes:
-                lenexample = 1
-            else:
-                lenexample = len(example)
-            # Проекция и исчисление на кортежах
-            if lenexample > len(self.arg):
-                A = set()
-                for el in obj:
-                    f = True
-                    for i in range(len(self.arg)):
-                        if type(self.arg[i]) is expr:
-                            if not (self.arg[i](el)):
-                                f = False
-                                break
-                    if f:
-                        a = []
-                        for i in range(len(self.arg)):
-                            if type(self.arg[i]) in [lazyindex, lazyattr, expr]:
-                                xx = self.arg[i](el)
-                                if type(xx) != bool:
-                                    a.append(xx)
-                                else:
-                                    a.append(el)
-                        if len(a) == 1:
-                            A.add(a[0])
-                        else:
-                            A.add(tuple(a))
-                return multset(A)
-            # Исчисление на доменах
-            else:
-                # группировка
-                g = False
-                lg = 0
-                arggroup = [None] * min(len(self.arg), lenexample)
-                for i in range(min(len(self.arg), lenexample)):
-                    if type(self.arg[i]) == vargrouptype:
-                        g = True
-                        lg = lg + 1
-                        arggroup[i] = var()
-                if g:
-                    grp = lazyset(obj)[*arggroup]
-                    res = lazyset()
-                    for el in grp:
-                        k = 0
-                        arggroup1 = [var() for a in range(len(arggroup))]
-                        for i in range(len(arggroup)):
-                            if type(arggroup[i]) == vartype:
-                                if lg > 1:
-                                    arggroup1[i] = el[k]
-                                else:
-                                    arggroup1[i] = el
-                                k = k + 1
-                        grp1 = lazyset(obj)[*arggroup1]
-                        b = []
-                        for i in range(len(arggroup1)):
-                            if type(arggroup1[i]) == vartype:
-                                b.append([])
-                            else:
-                                b.append(arggroup1[i])
-                        for a in grp1:
-                            for i in range(len(a)):
-                                if type(arggroup[i]) != vartype:
-                                    b[i].append(a[i])
-                        for i in range(len(b)):
-                            if type(b[i]) == list:
-                                b[i] = tuple(b[i])
-                        b = tuple(b)
-                        res.add(b)
-                    obj = res
-                # Формирование сигнатуры условий без учета None
-                for i in range(min(len(self.arg), lenexample)):
-                    if self.arg[i] != None:
-                        sign.append(i)
-                # Формирование списка условий
-                for i in range(len(self.arg)):
-                    if self.arg[i] != None:
-                        if callable(self.arg[i]):
-                            func.append(self.arg[i])
-                        # Создание функций - условий по заданным образцам
-                        else:
-                            if i < lenexample:
-                                v = var()
-                                func.append(v == self.arg[i])
-                if lenexample == 1:
-                    A = {(el,) for el in obj}
-                else:
-                    A = {tuple(el[i] for i in sign) for el in obj}
-                B = multset()
-                # Проверки выборок
-                for el in A:
-                    f = True
-                    # Проверки основных условий
-                    for i in range(min(len(func), len(sign))):
-                        if type(func[i]) == funcanytype or type(func[i]) == funcalltype:
-                            if not (func[i](el[i])()):
-                                f = False
-                                break
-                        elif (
-                            type(func[i]) not in [vartype, lazyindex, lazyattr]
-                            and type(func[i]) not in agrfunctypes
-                            and not (func[i](el[i]))
-                        ):
-                            f = False
-                            break
-                    # Одинаковым переменным в выборках соответствуют одинаковые значения:
-                    if f:
-                        argname = []
-                        for i in range(lenexample):
-                            if self.arg[i] != None:
-                                argname.append(self.arg[i])
-                        mask = [True] * len(argname)
-                        for i in range(len(argname)):
-                            for j in range(i + 1, len(argname)):
-                                if argname[i] is argname[j]:
-                                    mask[j] = False
-                                    if el[i] != el[j]:
-                                        f = False
-                                        break
-                            if not (f):
-                                break
-                    # проверки дополнительных условий
-                    if f:
-                        for i in range(len(sign), len(func)):
-                            S = func[i].createsign()
-                            for j in range(len(S)):
-                                for k in range(len(sign)):
-                                    if S[j] is self.arg[sign[k]]:
-                                        S[j](el[k])
-                            if not (func[i]()):
-                                f = False
-                                break
-                    # проекция - если выбирается индекс или атрибут, подменить элемент его составляющей
-                    if f:
-                        el = list(el)
-                        for i in range(len(sign)):
-                            if (
-                                type(self.arg[sign[i]]) in [lazyindex, lazyattr]
-                                or self.arg[sign[i]] in calcfunclist
-                            ):  # calcfunclist вероятно не работает
-                                # el[i]=self.arg[sign[i]](el[i])
-                                xx = self.arg[sign[i]](el[i])
-                                if type(xx) != bool:
-                                    el[i] = xx
-                        el = tuple(el)
-                    # Удаление дублирующих атрибутов
-                    if f:
-                        ex = tuple(el[i] for i in range(len(el)) if mask[i])
-                    # добавление конструируемых атрибутов
-                    if f:
-                        ex = list(ex)
-                        for i in range(lenexample, len(self.arg)):
-                            if (
-                                type(self.arg[i])
-                                not in [expr, lazyindex, lazyattr, vartype]
-                                and self.arg[i] not in calcfunclist
-                            ):  # calcfunclist вероятно не работает
-                                ex.append(self.arg[i])
-                            elif type(self.arg[i]) == vartype:
-                                for j in range(len(sign)):
-                                    if self.arg[i] is self.arg[sign[j]]:
-                                        ex.append(el[j])
-                            elif (
-                                type(self.arg[i]) == expr
-                                and self.arg[i].op
-                                not in ["<", "<=", "==", ">=", ">", "!="]
-                                or type(self.arg[i]) in [lazyindex, lazyattr]
-                                or self.arg[i] in calcfunclist
-                            ):
-                                S = self.arg[i].createsign()
-                                for j in range(len(S)):
-                                    for k in range(len(sign)):
-                                        if S[j] is self.arg[sign[k]]:
-                                            S[j](el[k])
-                                aa = self.arg[
-                                    i
-                                ]()  # последнее условие с calculus очевидно не работает, поэтому проверка:
-                                if type(aa) is not bool:
-                                    ex.append(aa)
-                        ex = tuple(ex)
-                    # помещение кортежа в результат:
-                    if f:
-                        if len(ex) == 1:
-                            ex = ex[0]
-                        B.add(ex)
-
-                # пробуем преобразовать результат в тип исходной коллекции:
-                f = False
-                if len(B) > 0 and not (g):
-                    for b in B:
-                        exampleres = b
-                        break
-                    if exampleres in obj:
-                        f = True
-                    elif (
-                        hasattr(exampleres, "__iter__")
-                        and hasattr(example, "__iter__")
-                        and hasattr(exampleres, "__len__")
-                        and hasattr(example, "__len__")
-                        and len(exampleres) == len(example)
-                        and not (hasattr(example, "qrcls"))
-                    ):
-                        f = all(
-                            type(el[0]) == type(el[1])
-                            for el in zip(exampleres, example)
-                        )
-                        if type(example)(exampleres) in obj:
-                            f = True
-                            B = (type(example)(b) for b in B)
-                if f and not (g):
-                    return createcoll(obj, B)
-                else:
-                    return multset(B)
-
-                return multset(B)
+            return _tuple_query(obj, self.arg)
         # Числовой индекс или срез
         else:
             # индекс из истин и лжи
