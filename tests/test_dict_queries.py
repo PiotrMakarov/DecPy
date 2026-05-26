@@ -131,3 +131,58 @@ def test_var_dict_python_semantics():
     vd = var(d)
     assert set(iter(vd())) == {"a", "b"}
     assert str(vd()) == str(d)
+
+
+def test_slice_full_pair():
+    prices = var({"яблоко": 80, "банан": 120, "вишня": 250})
+    k, v = var(2)
+    assert prices[k:v]() == {"яблоко": 80, "банан": 120, "вишня": 250}
+
+
+def test_slice_filter_by_value():
+    prices = var({"яблоко": 80, "банан": 120, "вишня": 250, "груша": 95})
+    k, v = var(2)
+    assert prices[k:v, v > 100]() == {"банан": 120, "вишня": 250}
+
+
+def test_slice_filter_by_key_and_value():
+    grades = var({"alice": 85, "bob": 92, "carol": 78, "dave": 55})
+    k, v = var(2)
+    assert grades[k:v, k < "carol", v >= 60]() == {"alice": 85, "bob": 92}
+
+
+def test_slice_inline_value_predicate():
+    prices = var({"яблоко": 80, "банан": 120, "вишня": 250})
+    k, v = var(2)
+    assert prices[k : v > 100]() == {"банан": 120, "вишня": 250}
+
+
+def test_slice_inline_both_predicates():
+    grades = var({"alice": 85, "bob": 92, "carol": 78, "dave": 55})
+    k, v = var(2)
+    assert grades[k < "carol" : v >= 60]() == {"alice": 85, "bob": 92}
+
+
+def test_slice_project_keys():
+    prices = var({"яблоко": 80, "банан": 120, "вишня": 250})
+    k = var()
+    assert set(prices[k:]()) == {"яблоко", "банан", "вишня"}
+
+
+def test_slice_project_values():
+    prices = var({"яблоко": 80, "банан": 120, "вишня": 250})
+    v = var()
+    assert set(prices[:v]()) == {80, 120, 250}
+
+
+def test_slice_project_values_with_inline_predicate():
+    prices = var({"яблоко": 80, "банан": 120, "вишня": 250})
+    v = var()
+    assert set(prices[: v > 100]()) == {120, 250}
+
+
+def test_slice_projection_chain():
+    prices = var({"яблоко": 80, "банан": 120, "вишня": 250})
+    k, v = var(2)
+    names = prices[k : v > 100][k, None]()
+    assert set(names) == {"банан", "вишня"}

@@ -537,9 +537,49 @@ def _tuple_query(obj, arg):
             return multset(B)
 
 
+def _normalize_dict_slice(arg):
+    """Преобразует slice-синтаксис D[k : v, ...] в обычный tuple для
+    исчисления доменов через пары (k, v).
+
+    Поддерживаемые формы:
+    D[k : v] -> (k, v)
+    D[k : v, conds...] -> (k, v, conds...)
+    D[k :] -> (k, None), проекция на ключи
+    D[: v] -> (None, v), проекция на значения
+    D[k>50 : v>1000] -> (k, v, k>50, v>1000)
+    D[k : v>1000] -> (k, v, v>1000)
+
+    Возвращает tuple, готовый к передаче в `_tuple_query` с `obj.items()`.
+    """
+    if type(arg) is slice:
+        sl, rest = arg, ()
+    else:
+        sl, rest = arg[0], arg[1:]
+
+    extras = []
+
+    def extract_pos(part):
+        if part is None or type(part) is vartype:
+            return part
+        if type(part) is expr:
+            sig = part.createsign()
+            extras.append(part)
+            if sig:
+                return sig[0]
+        return part
+
+    k_pos = extract_pos(sl.start)
+    v_pos = extract_pos(sl.stop)
+    return (k_pos, v_pos) + tuple(extras) + rest
+
+
 def _handle_dict_query(obj, arg):
     """Обработка запросов к dict: фильтрация/преобразование значений
     и domain calculus через пары (ключ, значение)."""
+    if type(arg) is slice or (
+        type(arg) is tuple and len(arg) > 0 and type(arg[0]) is slice
+    ):
+        arg = _normalize_dict_slice(arg)
     if type(arg) is tuple:
         result = _tuple_query(multset(obj.items()), arg)
         if (
@@ -657,6 +697,7 @@ class lazyindex(lazyabc):
         if isinstance(obj, dict) and (
             (callable(self.arg) and type(self.arg) is expr)
             or type(self.arg) is tuple
+            or type(self.arg) is slice
         ):
             return _handle_dict_query(obj, self.arg)
         # Одно условие - исчисление на кортежах
