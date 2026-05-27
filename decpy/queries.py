@@ -1,3 +1,4 @@
+from collections import Counter, OrderedDict, defaultdict, deque
 from copy import deepcopy
 
 from .core import (
@@ -71,9 +72,15 @@ def createcoll(obj, coll):
         and all(el in obj for el in coll)
     ):
         R = deepcopy(obj)
-        for el in zip(obj, R):
-            if el[0] not in coll:
-                R.remove(el[1])
+        obj_snapshot = list(obj)
+        R_snapshot = list(R)
+        to_remove = [
+            R_snapshot[i]
+            for i in range(len(obj_snapshot))
+            if obj_snapshot[i] not in coll
+        ]
+        for el in to_remove:
+            R.remove(el)
         return R
     # создание копии коллекции, её очистка и повторное заполнение отобранными значениями (попытка сохранить все настройки):
     elif (
@@ -533,8 +540,12 @@ def _tuple_query(obj, arg):
                     B = (type(example)(b) for b in B)
         if f and not (g):
             return createcoll(obj, B)
-        else:
-            return multset(B)
+        # Для последовательностей-подклассов (например, deque) сохраняем
+        # тип исходной коллекции даже при проекции, когда тип элементов
+        # результата отличается от типа элементов исходной коллекции.
+        if not g and isinstance(obj, deque):
+            return createcoll(obj, B)
+        return multset(B)
 
 
 def _normalize_dict_slice(arg):
@@ -573,6 +584,34 @@ def _normalize_dict_slice(arg):
     return (k_pos, v_pos) + tuple(extras) + rest
 
 
+def _build_dict_like(template, pairs):
+    """Создаёт словарь того же типа, что и `template`, из набора пар (k, v).
+
+    Учитывает особенности конструкторов подклассов dict:
+    - `defaultdict` требует `default_factory` первым аргументом;
+    - `Counter([pairs])` *считает* пары, а не копирует — нужно строить
+      через присваивание элементов;
+    - `OrderedDict`/обычный `dict` строятся напрямую от списка пар.
+    """
+    if isinstance(template, defaultdict):
+        result = type(template)(template.default_factory)
+        for k, v in pairs:
+            result[k] = v
+        return result
+    if isinstance(template, Counter):
+        result = type(template)()
+        for k, v in pairs:
+            result[k] = v
+        return result
+    if type(template) is dict:
+        return dict(pairs)
+    # OrderedDict и прочие подклассы dict с обычным конструктором
+    result = type(template)()
+    for k, v in pairs:
+        result[k] = v
+    return result
+
+
 def _handle_dict_query(obj, arg):
     """Обработка запросов к dict: фильтрация/преобразование значений
     и domain calculus через пары (ключ, значение)."""
@@ -587,12 +626,18 @@ def _handle_dict_query(obj, arg):
             and len(result) > 0
             and all(type(el) is tuple and len(el) == 2 for el in result)
         ):
-            return dict(result)
+            pairs = list(result)
+            # multset (set-семантика) теряет порядок; для OrderedDict
+            # восстанавливаем порядок ключей по исходной коллекции.
+            if isinstance(obj, OrderedDict):
+                order = {k: i for i, k in enumerate(obj.keys())}
+                pairs.sort(key=lambda kv: order.get(kv[0], len(order)))
+            return _build_dict_like(obj, pairs)
         return result
     if type(arg) is expr:
         if arg.op in ("<", "<=", "==", ">=", ">", "!=", "&", "|", "^"):
-            return {k: v for k, v in obj.items() if arg(v)}
-        return {k: arg(v) for k, v in obj.items()}
+            return _build_dict_like(obj, ((k, v) for k, v in obj.items() if arg(v)))
+        return _build_dict_like(obj, ((k, arg(v)) for k, v in obj.items()))
     return obj
 
 

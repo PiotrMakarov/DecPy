@@ -1,4 +1,17 @@
+from collections import Counter, OrderedDict, defaultdict
 from functools import reduce
+
+
+def _new_dict_like(template):
+    """Создаёт пустую коллекцию того же типа, что и `template`, с учётом
+    специфичных атрибутов (например, `default_factory` у `defaultdict`)."""
+    if isinstance(template, defaultdict):
+        return type(template)(template.default_factory)
+    if isinstance(template, (Counter, OrderedDict)):
+        return type(template)()
+    if type(template) is dict:
+        return {}
+    return type(template)()
 
 
 # универсальный способ добавления элемента в коллекцию
@@ -19,6 +32,15 @@ def app(coll, el):
 
 # универсальный способ соединения коллекций:
 def merge(coll1, coll2):
+    # Подклассы dict обрабатываются явно: при конфликте ключей побеждает
+    # значение из coll2, тип и специфичные атрибуты coll1 сохраняются.
+    if isinstance(coll1, dict) and isinstance(coll2, dict):
+        result = _new_dict_like(coll1)
+        for k, v in coll1.items():
+            result[k] = v
+        for k, v in coll2.items():
+            result[k] = v
+        return result
     if hasattr(coll1, "__add__") and hasattr(coll2, "__add__"):
         if type(coll1) == type(coll2):
             return coll1 + coll2
@@ -43,7 +65,7 @@ def flat(coll, n=0):
     # функция обычной линеаризации:
     def flat(coll):
         if isinstance(coll, dict):
-            L = {}
+            L = _new_dict_like(coll)
             for k, v in coll.items():
                 if isinstance(v, dict):
                     sub = flat(v)

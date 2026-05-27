@@ -1,3 +1,4 @@
+from collections import deque
 from functools import reduce
 from copy import deepcopy
 
@@ -109,6 +110,10 @@ class expr:
                 arg1 = multset(arg1.items())
             if isinstance(arg2, dict):
                 arg2 = multset(arg2.items())
+            if isinstance(arg1, deque):
+                arg1 = multset(arg1)
+            if isinstance(arg2, deque):
+                arg2 = multset(arg2)
             if type(arg1) == set or type(arg2) == set:
                 return multset(arg1) ** multset(arg2)
             return arg1**arg2
